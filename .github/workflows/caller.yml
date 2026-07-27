@@ -1,0 +1,25 @@
+name: caller
+on:
+  workflow_dispatch:
+    inputs:
+      pkg:
+        required: true
+        type: string
+      audience:
+        required: false
+        default: 'npm:registry.npmjs.org'
+        type: string
+      tag:
+        required: false
+        default: 'row'
+        type: string
+jobs:
+  call:
+    permissions:
+      id-token: write
+      contents: read
+    uses: larocasparocas-arch/tp-oidc-a/.github/workflows/publish.yml@main
+    with:
+      pkg: ${{ inputs.pkg }}
+      audience: ${{ inputs.audience }}
+      tag: ${{ inputs.tag }}
